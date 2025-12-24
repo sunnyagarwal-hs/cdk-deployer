@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -99,15 +101,20 @@ func (s *Synthesizer) InstallDependencies(projectType string) error {
 func (s *Synthesizer) installPythonDependencies() error {
 	venvPath := filepath.Join(s.projectPath, ".venv")
 
+	// Try python3 first, then python
+	pythonCmd := "python3"
+	if _, err := exec.LookPath("python3"); err != nil {
+		pythonCmd = "python"
+	}
+
+	// Check Python version compatibility
+	if err := s.checkPythonCompatibility(pythonCmd); err != nil {
+		return err
+	}
+
 	// Check if venv already exists
 	if _, err := os.Stat(venvPath); os.IsNotExist(err) {
 		fmt.Println("Creating Python virtual environment...")
-
-		// Try python3 first, then python
-		pythonCmd := "python3"
-		if _, err := exec.LookPath("python3"); err != nil {
-			pythonCmd = "python"
-		}
 
 		cmd := exec.Command(pythonCmd, "-m", "venv", ".venv")
 		cmd.Dir = s.projectPath
@@ -130,6 +137,113 @@ func (s *Synthesizer) installPythonDependencies() error {
 		return fmt.Errorf("failed to install dependencies: %w", err)
 	}
 
+	return nil
+}
+
+// getPythonVersion returns the version of the specified Python command
+func getPythonVersion(pythonCmd string) (major, minor, patch int, err error) {
+	cmd := exec.Command(pythonCmd, "--version")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("failed to get Python version: %w", err)
+	}
+
+	// Python version output format: "Python 3.9.7"
+	versionStr := strings.TrimSpace(string(output))
+	re := regexp.MustCompile(`Python (\d+)\.(\d+)\.(\d+)`)
+	matches := re.FindStringSubmatch(versionStr)
+	if len(matches) != 4 {
+		// Try simpler pattern for versions like "Python 3.9"
+		re = regexp.MustCompile(`Python (\d+)\.(\d+)`)
+		matches = re.FindStringSubmatch(versionStr)
+		if len(matches) != 3 {
+			return 0, 0, 0, fmt.Errorf("failed to parse Python version from: %s", versionStr)
+		}
+		major, _ = strconv.Atoi(matches[1])
+		minor, _ = strconv.Atoi(matches[2])
+		patch = 0
+		return major, minor, patch, nil
+	}
+
+	major, _ = strconv.Atoi(matches[1])
+	minor, _ = strconv.Atoi(matches[2])
+	patch, _ = strconv.Atoi(matches[3])
+	return major, minor, patch, nil
+}
+
+// getRequiredPythonVersion reads Python version requirements from project files
+func (s *Synthesizer) getRequiredPythonVersion() (minMajor, minMinor int, err error) {
+	// Check .python-version file (commonly used by pyenv)
+	pythonVersionFile := filepath.Join(s.projectPath, ".python-version")
+	if data, err := os.ReadFile(pythonVersionFile); err == nil {
+		versionStr := strings.TrimSpace(string(data))
+		re := regexp.MustCompile(`^(\d+)\.(\d+)`)
+		matches := re.FindStringSubmatch(versionStr)
+		if len(matches) == 3 {
+			major, _ := strconv.Atoi(matches[1])
+			minor, _ := strconv.Atoi(matches[2])
+			return major, minor, nil
+		}
+	}
+
+	// Check setup.py for python_requires
+	setupPyFile := filepath.Join(s.projectPath, "setup.py")
+	if data, err := os.ReadFile(setupPyFile); err == nil {
+		content := string(data)
+		// Look for python_requires='>=3.8' or python_requires=">=3.8"
+		re := regexp.MustCompile(`python_requires\s*=\s*['"]>=(\d+)\.(\d+)`)
+		matches := re.FindStringSubmatch(content)
+		if len(matches) == 3 {
+			major, _ := strconv.Atoi(matches[1])
+			minor, _ := strconv.Atoi(matches[2])
+			return major, minor, nil
+		}
+	}
+
+	// Check pyproject.toml for requires-python
+	pyprojectFile := filepath.Join(s.projectPath, "pyproject.toml")
+	if data, err := os.ReadFile(pyprojectFile); err == nil {
+		content := string(data)
+		// Look for requires-python = ">=3.8" or requires-python = '>=3.8'
+		re := regexp.MustCompile(`requires-python\s*=\s*['"]>=(\d+)\.(\d+)`)
+		matches := re.FindStringSubmatch(content)
+		if len(matches) == 3 {
+			major, _ := strconv.Atoi(matches[1])
+			minor, _ := strconv.Atoi(matches[2])
+			return major, minor, nil
+		}
+	}
+
+	// No specific version requirement found, assume Python 3.7+ (AWS CDK minimum)
+	return 3, 7, nil
+}
+
+// checkPythonCompatibility verifies that the Python version meets project requirements
+func (s *Synthesizer) checkPythonCompatibility(pythonCmd string) error {
+	// Get installed Python version
+	major, minor, patch, err := getPythonVersion(pythonCmd)
+	if err != nil {
+		return err
+	}
+
+	installedVersion := fmt.Sprintf("%d.%d.%d", major, minor, patch)
+	fmt.Printf("Detected Python version: %s\n", installedVersion)
+
+	// Get required Python version
+	reqMajor, reqMinor, err := s.getRequiredPythonVersion()
+	if err != nil {
+		return err
+	}
+
+	requiredVersion := fmt.Sprintf("%d.%d", reqMajor, reqMinor)
+	fmt.Printf("Required Python version: >=%s\n", requiredVersion)
+
+	// Check compatibility
+	if major < reqMajor || (major == reqMajor && minor < reqMinor) {
+		return fmt.Errorf("python version %s is incompatible with project requirements (>=%s)", installedVersion, requiredVersion)
+	}
+
+	fmt.Printf("Python version %s is compatible\n", installedVersion)
 	return nil
 }
 
