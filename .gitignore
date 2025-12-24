@@ -1,0 +1,46 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Compiled binary
+cdk-deployer
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# CDK output directories (from cloned projects)
+cdk.out/
+
+# Python virtual environments (from testing Python CDK projects)
+.venv/
+venv/
+__pycache__/
+
+# Temporary directories
+tmp/
+temp/
+
+.claude/
